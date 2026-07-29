@@ -4,6 +4,7 @@ export default {
     overview: 'Overview',
     inventory: 'Inventory',
     orders: 'Orders',
+    restocking: 'Restocking',
     finance: 'Finance',
     demandForecast: 'Demand Forecast',
     companyName: 'Catalyst Components',
@@ -106,6 +107,18 @@ export default {
     title: 'Orders',
     description: 'View and manage customer orders',
     allOrders: 'All Orders',
+    submittedOrders: 'Submitted Orders',
+    submittedOrdersDescription: 'Restocking orders raised from the demand forecast',
+    submittedTable: {
+      poNumber: 'PO Number',
+      items: 'Items',
+      units: 'Units',
+      totalCost: 'Total Cost',
+      leadTime: 'Lead Time',
+      expectedDelivery: 'Expected Delivery',
+      status: 'Status'
+    },
+    leadTimeDays: '{days} days',
     totalOrders: 'Total Orders',
     totalRevenue: 'Total Revenue',
     avgOrderValue: 'Avg Order Value',
@@ -168,6 +181,42 @@ export default {
   },
 
   // Demand Forecast
+  restocking: {
+    title: 'Restocking',
+    description: 'Recommend what to restock from the demand forecast within a budget',
+    availableBudget: 'Available Budget',
+    budgetHint: 'Move the slider to change how much you can spend',
+    fullRestockCost: 'Full Restock',
+    selectedCost: 'Selected',
+    remainingBudget: 'Remaining',
+    itemsSelected: 'Items Selected',
+    totalUnits: 'Total Units',
+    longestLeadTime: 'Longest Lead Time',
+    recommendations: 'Recommendations',
+    placeOrder: 'Place Order',
+    placingOrder: 'Submitting...',
+    orderPlaced: 'Order {poNumber} submitted — {items} items, {cost}, arriving by {date}',
+    viewInOrders: 'View in Orders',
+    nothingAffordable: 'No item fits this budget. Raise the budget to see recommendations.',
+    included: 'Included',
+    overBudget: 'Over budget',
+    noCatalogEntry: 'No cost data',
+    leadTimeDays: '{days} days',
+    packDetail: '{packs} x {size}',
+    table: {
+      sku: 'SKU',
+      itemName: 'Item Name',
+      trend: 'Trend',
+      required: 'Forecast Need',
+      orderQuantity: 'Order Qty',
+      unitCost: 'Unit Cost',
+      lineCost: 'Line Cost',
+      supplier: 'Supplier',
+      leadTime: 'Lead Time',
+      status: 'Status'
+    }
+  },
+
   demand: {
     title: 'Demand Forecast',
     description: 'Analyze demand trends and forecasts',
@@ -204,6 +253,7 @@ export default {
     shipped: 'Shipped',
     processing: 'Processing',
     backordered: 'Backordered',
+    submitted: 'Submitted',
     inStock: 'In Stock',
     lowStock: 'Low Stock',
     adequate: 'Adequate'

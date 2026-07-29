@@ -1,8 +1,11 @@
+import math
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
-from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders, restock_catalog
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -101,23 +104,67 @@ class BacklogItem(BaseModel):
     priority: str
     has_purchase_order: Optional[bool] = False
 
-class PurchaseOrder(BaseModel):
-    id: str
-    backlog_item_id: str
-    supplier_name: str
+class RestockRecommendation(BaseModel):
+    item_sku: str
+    item_name: str
+    trend: str
+    current_demand: int
+    forecasted_demand: int
+    # required_quantity is the raw 30-day need; order_quantity rounds it up to a full pack
+    required_quantity: int
+    order_quantity: int
+    pack_size: int
+    unit_cost: float
+    line_cost: float
+    supplier: str
+    lead_time_days: int
+    selected: bool
+    reason: str
+
+class RestockRecommendationsResponse(BaseModel):
+    budget: float
+    budget_min: float
+    budget_max: float
+    budget_step: float
+    budget_default: float
+    total_cost: float
+    total_units: int
+    items_selected: int
+    items_total: int
+    full_restock_cost: float
+    recommendations: List[RestockRecommendation]
+
+# A purchase order carries multiple lines: a restocking order covers several SKUs at once.
+# backlog_item_id stays optional so the single-item backlog flow can reuse the same shape.
+class PurchaseOrderLine(BaseModel):
+    item_sku: str
+    item_name: str
     quantity: int
     unit_cost: float
-    expected_delivery_date: str
+    supplier: str
+    lead_time_days: int
+    # Optional on input, always recomputed server-side before the order is stored
+    line_cost: float = 0.0
+
+class PurchaseOrder(BaseModel):
+    id: str
+    po_number: str
+    items: List[PurchaseOrderLine]
+    total_cost: float
+    total_units: int
     status: str
     created_date: str
+    expected_delivery: str
+    # Lead time of the whole order is the slowest line: the order isn't complete until all arrive
+    lead_time_days: int
+    budget: Optional[float] = None
+    backlog_item_id: Optional[str] = None
     notes: Optional[str] = None
 
 class CreatePurchaseOrderRequest(BaseModel):
-    backlog_item_id: str
-    supplier_name: str
-    quantity: int
-    unit_cost: float
-    expected_delivery_date: str
+    items: List[PurchaseOrderLine]
+    budget: Optional[float] = None
+    backlog_item_id: Optional[str] = None
     notes: Optional[str] = None
 
 # API endpoints
@@ -173,11 +220,185 @@ def get_backlog():
     result = []
     for item in backlog_items:
         item_dict = dict(item)
-        # Check if this backlog item has a purchase order
-        has_po = any(po["backlog_item_id"] == item["id"] for po in purchase_orders)
+        # Check if this backlog item has a purchase order.
+        # .get() rather than [] because restocking orders carry no backlog_item_id — indexing
+        # would raise KeyError and take this endpoint (and the dashboard) down.
+        has_po = any(po.get("backlog_item_id") == item["id"] for po in purchase_orders)
         item_dict["has_purchase_order"] = has_po
         result.append(item_dict)
     return result
+
+# Trend drives restocking urgency: rising demand must be covered first, falling demand last.
+TREND_PRIORITY = {'increasing': 0, 'stable': 1, 'decreasing': 2}
+
+# Suppliers quote in whole packs and budgets are set in round figures, so the slider snaps to this.
+BUDGET_STEP = 1000.0
+
+def build_restock_candidates() -> List[dict]:
+    """Join demand forecasts with the restocking catalog and size an order line per SKU.
+
+    A forecast SKU with no catalog row has no price anywhere in the dataset, so it comes back
+    unpriced and unselectable instead of being silently dropped or crashing the join.
+    """
+    catalog_by_sku = {row['item_sku']: row for row in restock_catalog}
+    candidates = []
+
+    for forecast in demand_forecasts:
+        catalog = catalog_by_sku.get(forecast['item_sku'])
+        required = forecast['forecasted_demand']
+
+        base = {
+            'item_sku': forecast['item_sku'],
+            'item_name': forecast['item_name'],
+            'trend': forecast['trend'],
+            'current_demand': forecast['current_demand'],
+            'forecasted_demand': forecast['forecasted_demand'],
+            'required_quantity': required,
+            'selected': False,
+        }
+
+        if not catalog:
+            candidates.append({
+                **base,
+                'order_quantity': 0,
+                'pack_size': 0,
+                'unit_cost': 0.0,
+                'line_cost': 0.0,
+                'supplier': '',
+                'lead_time_days': 0,
+                'reason': 'no_catalog_entry',
+            })
+            continue
+
+        # Suppliers ship whole packs, so round the 30-day need up to the next full pack
+        pack_size = catalog['pack_size'] or 1
+        order_quantity = math.ceil(required / pack_size) * pack_size
+
+        candidates.append({
+            **base,
+            'order_quantity': order_quantity,
+            'pack_size': pack_size,
+            'unit_cost': catalog['unit_cost'],
+            'line_cost': round(order_quantity * catalog['unit_cost'], 2),
+            'supplier': catalog['supplier'],
+            'lead_time_days': catalog['lead_time_days'],
+            'reason': 'over_budget',
+        })
+
+    return candidates
+
+def rank_restock_candidates(candidates: List[dict]) -> List[dict]:
+    """Order candidates by urgency: trend first, then relative growth, then cheapest line."""
+    def sort_key(candidate):
+        current = candidate['current_demand']
+        # Relative growth, negated so the steepest climb sorts first
+        growth = (candidate['forecasted_demand'] - current) / current if current > 0 else 0.0
+        return (
+            TREND_PRIORITY.get(candidate['trend'].lower(), len(TREND_PRIORITY)),
+            -growth,
+            candidate['line_cost'],
+        )
+
+    return sorted(candidates, key=sort_key)
+
+@app.get("/api/restocking/recommendations", response_model=RestockRecommendationsResponse)
+def get_restocking_recommendations(budget: Optional[float] = None):
+    """Recommend which forecast items to restock within a budget.
+
+    Returns every candidate with a `selected` flag rather than only the affordable ones, so the
+    client can show what a bigger budget would buy. The slider range is derived from the data:
+    at budget_max the whole restock fits.
+    """
+    if budget is not None and budget < 0:
+        raise HTTPException(status_code=400, detail="Budget cannot be negative")
+
+    candidates = rank_restock_candidates(build_restock_candidates())
+
+    full_restock_cost = round(sum(c['line_cost'] for c in candidates), 2)
+    # Round the ceiling up to a whole step so the slider's far end always affords everything
+    budget_max = math.ceil(full_restock_cost / BUDGET_STEP) * BUDGET_STEP
+    budget_default = math.floor((budget_max / 2) / BUDGET_STEP) * BUDGET_STEP
+    effective_budget = budget_default if budget is None else budget
+
+    # Greedy fill that skips instead of stopping: a cheap line further down the ranking can
+    # still fit in the budget an expensive line above it could not.
+    remaining = effective_budget
+    for candidate in candidates:
+        if candidate['line_cost'] > 0 and candidate['line_cost'] <= remaining:
+            candidate['selected'] = True
+            candidate['reason'] = candidate['trend'].lower()
+            remaining = round(remaining - candidate['line_cost'], 2)
+
+    selected = [c for c in candidates if c['selected']]
+
+    return {
+        'budget': effective_budget,
+        'budget_min': 0.0,
+        'budget_max': budget_max,
+        'budget_step': BUDGET_STEP,
+        'budget_default': budget_default,
+        'total_cost': round(sum(c['line_cost'] for c in selected), 2),
+        'total_units': sum(c['order_quantity'] for c in selected),
+        'items_selected': len(selected),
+        'items_total': len(candidates),
+        'full_restock_cost': full_restock_cost,
+        'recommendations': candidates,
+    }
+
+@app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
+def create_purchase_order(request: CreatePurchaseOrderRequest):
+    """Submit a purchase order. Serves both the restocking tab and the backlog flow."""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="A purchase order needs at least one line item")
+
+    created = datetime.now()
+    sequence = len(purchase_orders) + 1
+
+    # Recompute line_cost server-side rather than trusting the client's arithmetic
+    lines = []
+    for line in request.items:
+        line_dict = line.model_dump()
+        line_dict['line_cost'] = round(line.quantity * line.unit_cost, 2)
+        lines.append(line_dict)
+
+    lead_time_days = max(line['lead_time_days'] for line in lines)
+
+    purchase_order = {
+        'id': str(sequence),
+        'po_number': f"PO-{created.year}-{sequence:04d}",
+        'items': lines,
+        'total_cost': round(sum(line['line_cost'] for line in lines), 2),
+        'total_units': sum(line['quantity'] for line in lines),
+        'status': 'Submitted',
+        'created_date': created.strftime('%Y-%m-%d'),
+        'expected_delivery': (created + timedelta(days=lead_time_days)).strftime('%Y-%m-%d'),
+        'lead_time_days': lead_time_days,
+        'budget': request.budget,
+        'backlog_item_id': request.backlog_item_id,
+        'notes': request.notes,
+    }
+
+    # In-memory only: mock_data reloads from JSON at startup, so submitted orders don't survive
+    # a server restart. Same trade-off as the rest of this demo's data layer.
+    purchase_orders.append(purchase_order)
+    return purchase_order
+
+@app.get("/api/purchase-orders", response_model=List[PurchaseOrder])
+def get_purchase_orders():
+    """Get submitted purchase orders, most recent first."""
+    return list(reversed(purchase_orders))
+
+@app.get("/api/purchase-orders/{backlog_item_id}", response_model=PurchaseOrder)
+def get_purchase_order_by_backlog_item(backlog_item_id: str):
+    """Get the most recent purchase order raised for a backlog item."""
+    for purchase_order in reversed(purchase_orders):
+        if purchase_order.get('backlog_item_id') == backlog_item_id:
+            return purchase_order
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Purchase order for backlog item {backlog_item_id} not found"
+    )
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(
