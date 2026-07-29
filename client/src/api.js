@@ -94,6 +94,20 @@ export const api = {
     return response.data
   },
 
+  async getRestockingRecommendations(budget) {
+    const params = new URLSearchParams()
+    // Omitting budget lets the server pick its data-derived default and report the slider range
+    if (budget !== undefined && budget !== null) params.append('budget', budget)
+
+    const response = await axios.get(`${API_BASE_URL}/restocking/recommendations?${params.toString()}`)
+    return response.data
+  },
+
+  async getPurchaseOrders() {
+    const response = await axios.get(`${API_BASE_URL}/purchase-orders`)
+    return response.data
+  },
+
   async createPurchaseOrder(purchaseOrderData) {
     const response = await axios.post(`${API_BASE_URL}/purchase-orders`, purchaseOrderData)
     return response.data

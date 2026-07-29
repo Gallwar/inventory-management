@@ -27,6 +27,74 @@
         </div>
       </div>
 
+      <!-- Purchase orders submitted from the Restocking tab. No time filter applies (they're not customer orders). -->
+      <div v-if="purchaseOrders.length > 0" class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="card-title">{{ t('orders.submittedOrders') }} ({{ purchaseOrders.length }})</h3>
+            <p class="card-subtitle">{{ t('orders.submittedOrdersDescription') }}</p>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="po-table">
+            <thead>
+              <tr>
+                <th class="col-po-number">{{ t('orders.submittedTable.poNumber') }}</th>
+                <th class="col-items">{{ t('orders.submittedTable.items') }}</th>
+                <th class="col-po-units">{{ t('orders.submittedTable.units') }}</th>
+                <th class="col-value">{{ t('orders.submittedTable.totalCost') }}</th>
+                <th class="col-lead-time">{{ t('orders.submittedTable.leadTime') }}</th>
+                <th class="col-date">{{ t('orders.submittedTable.expectedDelivery') }}</th>
+                <th class="col-status">{{ t('orders.submittedTable.status') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="po in purchaseOrders" :key="po.po_number">
+                <tr>
+                  <td class="col-po-number"><strong>{{ po.po_number }}</strong></td>
+                  <td class="col-items">
+                    <!-- Toggles an inline detail row below (see template further down) instead of the
+                         All Orders table's <details>/absolute-dropdown pattern: this table is often
+                         only one row tall, so a floating dropdown has no room before it gets clipped
+                         by the .table-container ancestor (App.vue's overflow-x: auto forces overflow-y
+                         to clip too). A same-width row in normal table flow can't be clipped and needs
+                         no extra space, so it holds up at any viewport width. -->
+                    <button
+                      type="button"
+                      class="po-items-toggle"
+                      :class="{ expanded: expandedPOs.has(po.po_number) }"
+                      :aria-expanded="expandedPOs.has(po.po_number)"
+                      @click="togglePOItems(po.po_number)"
+                    >
+                      {{ t('orders.itemsCount', { count: po.items.length }) }}
+                    </button>
+                  </td>
+                  <td class="col-po-units">{{ po.total_units.toLocaleString() }}</td>
+                  <td class="col-value"><strong>{{ formatCurrency(po.total_cost, currentCurrency) }}</strong></td>
+                  <td class="col-lead-time">{{ t('orders.leadTimeDays', { days: po.lead_time_days }) }}</td>
+                  <td class="col-date">{{ formatDate(po.expected_delivery) }}</td>
+                  <td class="col-status">
+                    <span :class="['badge', getOrderStatusClass(po.status)]">
+                      {{ t(`status.${po.status.toLowerCase()}`) }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="expandedPOs.has(po.po_number)" class="items-expanded-row">
+                  <td class="items-expanded-cell" colspan="7">
+                    <div class="items-expanded-list">
+                      <div v-for="item in po.items" :key="item.item_sku" class="item-entry">
+                        <span class="item-name">{{ translateProductName(item.item_name) }}</span>
+                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ formatCurrency(item.unit_cost, currentCurrency) }}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.allOrders') }} ({{ orders.length }})</h3>
@@ -83,6 +151,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
+import { formatCurrency } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -95,6 +164,25 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+
+    // Submitted purchase orders (from Restocking). Not affected by the global filters, loaded and
+    // errored independently so a failure here never blanks out the customer orders table above.
+    const purchaseOrders = ref([])
+    const poError = ref(null)
+
+    // Tracks which submitted purchase orders currently have their items expanded (inline row, see template)
+    const expandedPOs = ref(new Set())
+
+    const togglePOItems = (poNumber) => {
+      // Assign a new Set rather than mutating in place, so the ref reliably triggers a re-render
+      const next = new Set(expandedPOs.value)
+      if (next.has(poNumber)) {
+        next.delete(poNumber)
+      } else {
+        next.add(poNumber)
+      }
+      expandedPOs.value = next
+    }
 
     // Use shared filters
     const {
@@ -129,6 +217,19 @@ export default {
       loadOrders()
     })
 
+    const loadPurchaseOrders = async () => {
+      try {
+        // Purchase orders have no filter dimensions (warehouse/category/status/month), so this
+        // is deliberately not wired into the filter watch above.
+        purchaseOrders.value = await api.getPurchaseOrders()
+      } catch (err) {
+        // Kept separate from `error` so a purchase-order fetch failure doesn't hide the
+        // customer orders table, which has already loaded successfully.
+        poError.value = 'Failed to load purchase orders: ' + err.message
+        console.error(poError.value, err)
+      }
+    }
+
     const getOrdersByStatus = (status) => {
       return orders.value.filter(order => order.status === status)
     }
@@ -138,7 +239,8 @@ export default {
         'Delivered': 'success',
         'Shipped': 'info',
         'Processing': 'warning',
-        'Backordered': 'danger'
+        'Backordered': 'danger',
+        'Submitted': 'info'
       }
       return statusMap[status] || 'info'
     }
@@ -153,17 +255,26 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    onMounted(() => {
+      loadOrders()
+      loadPurchaseOrders()
+    })
 
     return {
       t,
       loading,
       error,
       orders,
+      purchaseOrders,
+      poError,
+      expandedPOs,
+      togglePOItems,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      formatCurrency,
       currencySymbol,
+      currentCurrency,
       translateProductName,
       translateCustomerName
     }
@@ -172,10 +283,31 @@ export default {
 </script>
 
 <style scoped>
+/* Subtitle line under the Submitted Orders card title */
+.card-subtitle {
+  color: #64748b;
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
 /* Fixed table layout to prevent column shifting */
-.orders-table {
+.orders-table,
+.po-table {
   table-layout: fixed;
   width: 100%;
+}
+
+/* Submitted Orders column widths (col-items/col-status/col-date/col-value are shared below) */
+.col-po-number {
+  width: 130px;
+}
+
+.col-po-units {
+  width: 100px;
+}
+
+.col-lead-time {
+  width: 110px;
 }
 
 /* Column widths */
@@ -203,7 +335,52 @@ export default {
   width: 120px;
 }
 
-/* Items details styling */
+/* Submitted Orders items toggle + inline expanded row. A plain button + full-width row in
+   normal table flow (rather than the <details>/absolute-dropdown pattern below, which this
+   single-row table has no room to clip-free render) so it survives at any viewport width. */
+.po-items-toggle {
+  cursor: pointer;
+  color: #3b82f6;
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.po-items-toggle:hover {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.po-items-toggle::before {
+  content: '▶';
+  display: inline-block;
+  margin-right: 0.375rem;
+  font-size: 0.75rem;
+  transition: transform 0.2s;
+}
+
+.po-items-toggle.expanded::before {
+  transform: rotate(90deg);
+}
+
+.items-expanded-row td {
+  background: #f8fafc;
+}
+
+.items-expanded-cell {
+  padding: 0.75rem 1rem;
+}
+
+.items-expanded-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Items details styling (used by the All Orders table below) */
 .items-details {
   position: relative;
 }

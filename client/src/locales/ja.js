@@ -4,6 +4,7 @@ export default {
     overview: '概要',
     inventory: '在庫',
     orders: '注文',
+    restocking: '在庫補充',
     finance: '財務',
     demandForecast: '需要予測',
     companyName: '触媒コンポーネンツ',
@@ -106,6 +107,18 @@ export default {
     title: '注文',
     description: '顧客注文の表示と管理',
     allOrders: 'すべての注文',
+    submittedOrders: '発注済み注文',
+    submittedOrdersDescription: '需要予測に基づいて発注した補充注文',
+    submittedTable: {
+      poNumber: '発注番号',
+      items: '品目',
+      units: '数量',
+      totalCost: '合計金額',
+      leadTime: 'リードタイム',
+      expectedDelivery: '予定納期',
+      status: 'ステータス'
+    },
+    leadTimeDays: '{days}日',
     totalOrders: '総注文数',
     totalRevenue: '総収益',
     avgOrderValue: '平均注文額',
@@ -168,6 +181,42 @@ export default {
   },
 
   // Demand Forecast
+  restocking: {
+    title: '在庫補充',
+    description: '予算内で需要予測から補充すべき品目を提案します',
+    availableBudget: '利用可能な予算',
+    budgetHint: 'スライダーを動かして予算を調整してください',
+    fullRestockCost: '全品補充',
+    selectedCost: '選択済み',
+    remainingBudget: '残り',
+    itemsSelected: '選択品目数',
+    totalUnits: '合計数量',
+    longestLeadTime: '最長リードタイム',
+    recommendations: '推奨品目',
+    placeOrder: '発注する',
+    placingOrder: '送信中...',
+    orderPlaced: '発注番号 {poNumber} を送信しました — {items}品目、{cost}、{date}までに到着予定',
+    viewInOrders: '注文タブで表示',
+    nothingAffordable: 'この予算では発注できる品目がありません。予算を増やしてください。',
+    included: '対象',
+    overBudget: '予算超過',
+    noCatalogEntry: '価格データなし',
+    leadTimeDays: '{days}日',
+    packDetail: '{packs} x {size}',
+    table: {
+      sku: 'SKU',
+      itemName: '品目名',
+      trend: 'トレンド',
+      required: '予測必要数',
+      orderQuantity: '発注数量',
+      unitCost: '単価',
+      lineCost: '金額',
+      supplier: '仕入先',
+      leadTime: 'リードタイム',
+      status: 'ステータス'
+    }
+  },
+
   demand: {
     title: '需要予測',
     description: '需要動向の分析と将来のニーズの予測',
@@ -204,6 +253,7 @@ export default {
     shipped: '出荷済み',
     processing: '処理中',
     backordered: 'バックオーダー',
+    submitted: '発注済み',
     inStock: '在庫あり',
     lowStock: '在庫僅少',
     adequate: '適量'

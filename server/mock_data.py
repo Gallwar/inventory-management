@@ -35,5 +35,11 @@ recent_transactions = load_json_file('transactions.json')
 # Load purchase orders
 purchase_orders = load_json_file('purchase_orders.json')
 
+# Load restocking catalog: procurement metadata (cost, supplier, lead time, pack size) for the
+# SKUs that appear in demand_forecasts.json. This file exists because those SKUs are NOT present
+# in inventory.json — only PSU-501 overlaps — so there is no other source of unit cost for them.
+# PSU-501's unit_cost mirrors its inventory.json value (18.99) to keep the two consistent.
+restock_catalog = load_json_file('restock_catalog.json')
+
 # All data is now loaded from JSON files in the data/ directory
 # This allows for easier maintenance and updates of the sample data
